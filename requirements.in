@@ -1,0 +1,4 @@
+aiohttp
+boto3
+pyTelegramBotAPI
+python-dotenv
