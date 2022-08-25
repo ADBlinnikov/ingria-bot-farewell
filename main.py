@@ -289,4 +289,4 @@ bot.add_custom_filter(asyncio_filters.IsDigitFilter())
 # Polling
 import asyncio
 
-asyncio.run(bot.polling())
+asyncio.run(bot.infinity_polling())
