@@ -1,5 +1,7 @@
+from ast import expr_context
 import logging
 import os
+from time import sleep
 import boto3
 from botocore.errorfactory import ClientError
 import json
@@ -289,4 +291,12 @@ bot.add_custom_filter(asyncio_filters.IsDigitFilter())
 # Polling
 import asyncio
 
-asyncio.run(bot.infinity_polling())
+while True:
+    try:
+        asyncio.run(bot.infinity_polling())
+    except KeyboardInterrupt:
+        break
+    except Exception as ex:
+        logger.exception("Ошибка при поллинге. Перезапускаю процесс.", exc_info=ex)
+        sleep(10)
+        continue
