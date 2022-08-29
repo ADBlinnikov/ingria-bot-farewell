@@ -1,26 +1,29 @@
-from ast import expr_context
+import asyncio
+import json
 import logging
 import os
+from ast import expr_context
+from random import randint
 from time import sleep
+from typing import Callable, List
+
 import boto3
-from botocore.errorfactory import ClientError
-import json
-from dotenv import load_dotenv
 import telebot
+from botocore.errorfactory import ClientError
+from dotenv import load_dotenv
 from telebot import asyncio_filters
 from telebot.async_telebot import AsyncTeleBot, ExceptionHandler
 from telebot.asyncio_storage import StateMemoryStorage
 from telebot.types import ReplyKeyboardMarkup
-from typing import List
-from random import randint
+from yaml import SafeLoader, load
 
 # Logging
 logger = telebot.logger
 telebot.logger.setLevel(logging.INFO)
 
 
-def log_user_answer(point: str, expected: str, answer: str) -> None:
-    logger.info(f"Point: {point} Expected: {expected} Answer: {answer}")
+def log_user_answer(point: str, answer: str) -> None:
+    logger.info(f"Point: {point} Answer: {answer}")
 
 
 # Environment variables
@@ -141,155 +144,52 @@ async def after_finish_ex(message):
 
 
 # Excursion points
-QUESTION_HOSE = [
-    "В первое время на территории Санкт-Петербурга неправославных христиан хоронили вместе.",
-    "Например, первое католическое кладбище в Петербурге появилось только в 1856 году на Выборгской стороне. Поэтому на Смоленском Лютеранском кладбище,  действующее с 1747 года, периодически можно встретить захоронения католиков и иных представителей протестантских течений.",
-    "Как раз здесь нашёл своё последние пристанище испанец, видный военный деятель и основатель города Одессы.",
-    "Тем не менее независимо от принадлежности крест – это главный символ для христиан, часто устанавливаемый на захоронение. Вот и рядом с этим военным есть подобная могила.",
-    "Напишите фамилию человека с крестом на надгробии.",
-]
+with open("./text.yaml", "r") as f:
+    texts = load(f, SafeLoader)
 
-INFO_HOSE = [
-    "Хосе де Рибас или Иосиф (Осип) Михайлович Дерибас родился 13 сентября 1751 г. в итальянском городе Неаполе. Отец Мигель де Рибас, принадлежавший к старинному каталонскому дворянскому роду, переселился туда из Испании..."
-]
+answer_checkers = {
+    "Хосе": lambda m: "гесс" in m,
+    "Массон": lambda m: "яковлев" in m,
+    "Гримм": lambda m: "1933" in m,
+    "Парланд": lambda m: "обп" in m or "о.б.п." in m or "облсовет" in m or "осоавиахим" in m,
+}
 
 
-@bot.message_handler(state="start")
-async def questionHose(message):
-    await bot.set_state(message.from_user.id, "ВопросХосе", message.chat.id)
-    await send_messages(message.chat.id, QUESTION_HOSE)
+class QuestionHandler:
+    def __init__(self, step: str, prev_step: str, is_correct: Callable[[str], bool]):
+        self.step = step
+        self.is_correct = is_correct
 
+        bot.register_message_handler(self.question, state=prev_step)
+        bot.register_message_handler(self.answer, state=f"Спросил_{self.step}")
 
-@bot.message_handler(state="ВопросХосе")
-async def pointHose(message):
-    log_user_answer("Hose", "Гессъ", message.text)
-    if "гесс" in message.text.lower():
-        await bot.set_state(message.from_user.id, "Хосе", message.chat.id)
-        await send_messages(message.chat.id, INFO_HOSE, True)
-    else:
-        await bot.send_message(message.chat.id, "Это неправильный ответ")
+    async def question(self, message):
+        await bot.set_state(message.from_user.id, f"Спросил_{self.step}", message.chat.id)
+        await send_messages(message.chat.id, texts[self.step]["вопрос"])
 
+    async def answer(self, message):
+        log_user_answer(self.step, message.text)
+        if self.is_correct(message.text.lower()):
+            await bot.set_state(message.from_user.id, f"{self.step}", message.chat.id)
+            await send_messages(message.chat.id, texts[self.step]["кстати"], True)
+        else:
+            await bot.send_message(message.chat.id, "Это неправильный ответ")
 
-QUESTION_MASSON = [
-    "Прогуливаясь по историческим кладбищам, нередко можно встретить весьма необычные надгробия в форме дерева",
-    "Найдите необычный памятник в данной области и введите фамилию покойного",
-]
-
-INFO_MASSON = [
-    "В Средневековье в Европе появляются разные объединения цехов, в том числе и братство каменщиков. Благодаря востребованности данной специальности члены цеха пользовались привилегиями и льготами. Данную группу людей называли “вольными каменщиками” , на старофранцузский манер переводится как masson..."
-]
-
-
-@bot.message_handler(state="Хосе")
-async def questionMasson(message):
-    await bot.set_state(message.from_user.id, "ВопросМассон", message.chat.id)
-    await send_messages(message.chat.id, QUESTION_MASSON)
-
-
-@bot.message_handler(state="ВопросМассон")
-async def pointMasson(message):
-    log_user_answer("Masson", "Яковлева", message.text)
-    if "яковлев" in message.text.lower():
-        await bot.set_state(message.from_user.id, "Массон", message.chat.id)
-        await send_messages(message.chat.id, INFO_MASSON, True)
-    else:
-        await bot.send_message(message.chat.id, "Это неправильный ответ")
-
-
-QUESTION_GRIMM = [
-    "На данном кладбище огромное количество деятелей культуры и искусства",
-    "Например, представители одной очень известной династии архитекторов. Отец был автором историко-архитектурного исследования “Памятники византийской архитектуры в Грузии и Армении”, а сын являлся востребованным архитекторам как в Российской империи, так и при советской власти.",
-    "Найдите их семейное захоронение, а для ответа укажите год смерти соседней могилы Г.Ю.Лаан",
-]
-
-INFO_GRIMM = [
-    "Давида Ивановича Гримма родился в Санкт-Петербурге в 1823 году, учился в Немецкой школе святого Петра а затем  в Академии Художеств. За успехи в рисовании и зодчестве был награждён золотыми и серебряными медалями Академии."
-]
-
-
-@bot.message_handler(state="Массон")
-async def questionGrimm(message):
-    await bot.set_state(message.from_user.id, "ВопросГримм", message.chat.id)
-    await send_messages(message.chat.id, QUESTION_GRIMM)
-
-
-@bot.message_handler(state="ВопросГримм")
-async def pointGrimm(message):
-    log_user_answer("Grimm", "1933", message.text)
-    if "1933" in message.text.lower():
-        await bot.set_state(message.from_user.id, "Гримм", message.chat.id)
-        await send_messages(message.chat.id, INFO_GRIMM, True)
-    else:
-        await bot.send_message(message.chat.id, "Это неправильный ответ")
-
-
-QUESTION_PARLAND = [
-    "Этот храм-мемориал в честь Воскресения Христова является шедевром архитектуры в русском стиле",
-    "На данном кладбище покоится автор данного здания. Найдите захоронения этого архитектора",
-    "Для ответа перепишите информацию с соседней могилы: полное название организации, где работал старший инспектор Львов",
-]
-
-INFO_PARLAND = [
-    "Альфред Александрович Парланд, архитектор Спаса на Крови, родился в 1842 г. в купеческой семье",
-    "Его дед, Джон Парланд, был преподавателем английского языка в семье императора Павла I",
-]
-
-
-@bot.message_handler(state="Гримм")
-async def questionParland(message):
-    await bot.set_state(message.from_user.id, "ВопросПарланд", message.chat.id)
-    await send_messages(message.chat.id, QUESTION_PARLAND)
-
-
-@bot.message_handler(state="ВопросПарланд")
-async def pointParland(message):
-    log_user_answer("Parland", "О.Б.П. Облсовета Осоавиахима", message.text)
-    if (
-        "о.б.п." in message.text.lower()
-        or "обп" in message.text.lower()
-        or "облсовет" in message.text.lower()
-        or "осоавиахим" in message.text.lower()
-    ):
-        await bot.set_state(message.from_user.id, "Парланд", message.chat.id)
-        await send_messages(message.chat.id, INFO_PARLAND, True)
-    else:
-        await bot.send_message(message.chat.id, "Это неправильный ответ")
-
-QUESTION_CINISELLI = [
-    "Принято считать, что в середине XVIII в. в Англии, Филипп Астлей основал первый в мире постоянный цирк",
-    "Для этого в Лондоне появилось специальное здание для школы верховой езды, названное амфитеатром. Он также является основателем и первой цирковой династии",
-    "На территории Смоленского Лютеранского кладбища покоится создатель цирка на Фонтанке",
-    "Для ответа обратите внимание на соседнее небольшое семейное захоронение. Взгляните на него и посчитайте, сколько лет было  маленькой девочке Татьяне Дмитриевне."
-]
-
-INFO_CINISELLI = [
-    "Цирк Чинизелли – это первый в России каменный стационарный цирк. Сам Гаэтано Чинизелли родился 1 марта 1815 года в Италии",
-    "С двенадцати лет стал учеником в цирковой труппе Алессандро Гверра. В 1846 году по приглашению своего учителя приехал в Россию вместе с женой, наездницей Вильгельминой Гинне и шестилетним сыном Андреа. Гверра владел деревянным цирком в столице, но в 1847 заведение было закрыто из-за финансовых проблем.",
-    "Таким образом, Гаэтано Чинизелли на несколько лет переезжает в Лондон"
-]
-
-@bot.message_handler(state="Парланд")
-async def questionCiniselli(message):
-    await bot.set_state(message.from_user.id, "ВопросЧинизелли", message.chat.id)
-    await send_messages(message.chat.id, QUESTION_CINISELLI)
-
-
-@bot.message_handler(state="ВопросЧинизелли")
-async def pointCiniselli(message):
-    log_user_answer("Ciniselli", "О.Б.П. Облсовета Осоавиахима", message.text)
-    if "34" in message.text.lower():
-        await bot.set_state(message.from_user.id, "Чинизелли", message.chat.id)
-        await send_messages(message.chat.id, INFO_CINISELLI, True)
-    else:
-        await bot.send_message(message.chat.id, "Это неправильный ответ")
-
+# Наполняем логику бота из файла с текстами
+prev_step = "start"
+for point in texts.keys():
+    try:
+        checker = answer_checkers[point]
+    except KeyError:
+        raise RuntimeError(f"Нет функции проверки ответа для {point}")
+    QuestionHandler(step=point, prev_step=prev_step, is_correct=checker)
+    prev_step = point
 
 
 bot.add_custom_filter(asyncio_filters.StateFilter(bot))
 bot.add_custom_filter(asyncio_filters.IsDigitFilter())
 
 # Polling
-import asyncio
 
 while True:
     try:
