@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-from ast import expr_context
 from random import randint
 from time import sleep
 from typing import Callable, List
@@ -19,11 +18,11 @@ from yaml import SafeLoader, load
 
 # Logging
 logger = telebot.logger
-telebot.logger.setLevel(logging.INFO)
+telebot.logger.setLevel(logging.DEBUG)
 
 
-def log_user_answer(point: str, answer: str) -> None:
-    logger.info(f"Point: {point} Answer: {answer}")
+def log_user_answer(expected: str, answer: str) -> None:
+    logger.info(f"Expected: {expected} Answer: {answer}")
 
 
 # Environment variables
@@ -86,12 +85,19 @@ markup.add("Идем дальше")
 
 CONGRATS = ["Это правильный ответ", "Верно", "Правильно"]
 
+async def log_state(message):
+    state = await bot.current_states.get_state(message.from_user.id, message.chat.id)
+    logger.info(f"State: {state}")
 
 async def send_messages(chat_id: str, messages: List[str], after_answer: bool = False):
     if after_answer:
         await bot.send_message(chat_id, CONGRATS[randint(0, len(CONGRATS) - 1)])
     for msg in messages:
-        await bot.send_message(chat_id, msg, reply_markup=None)
+        if isinstance(msg, str):
+            await bot.send_message(chat_id, msg, reply_markup=None)
+        else:
+            if msg["type"] == "photo":
+                await bot.send_photo(chat_id, msg["file_id"])
     if after_answer:
         await bot.send_message(
             chat_id,
@@ -108,6 +114,7 @@ async def start_ex(message):
     Инициализация состояния и знакомство.
     """
     # State
+    await log_state(message)
     await bot.delete_state(message.from_user.id, message.chat.id)
     await bot.set_state(message.from_user.id, "start", message.chat.id)
     # Messages
@@ -129,6 +136,7 @@ async def finish_ex(message):
     Финиш экскурсии.
     Поздравляем героя и заносим его в список
     """
+    await log_state(message)
     await bot.set_state(message.from_user.id, "finish", message.chat.id)
     await bot.send_message(message.chat.id, "Поздравляю. Вот тебе подарок (ТУТ ДОЛЖЕН БЫТЬ ПОДАРОК)")
     # Сохранить данные о прохождении квеста в БД
@@ -137,6 +145,7 @@ async def finish_ex(message):
 
 @bot.message_handler(state="finish")
 async def after_finish_ex(message):
+    await log_state(message)
     await bot.send_message(
         message.chat.id,
         "Ты уже прошел квест. Если хочешь начать сначала напиши /start",
@@ -152,6 +161,20 @@ answer_checkers = {
     "Массон": lambda m: "яковлев" in m,
     "Гримм": lambda m: "1933" in m,
     "Парланд": lambda m: "обп" in m or "о.б.п." in m or "облсовет" in m or "осоавиахим" in m,
+    "Чинизелли": lambda m: "34" in m,
+    "Горвиц": lambda m: "товарищи" in m,
+    "Грейг": lambda m: "прасков" in m,
+    "Бекман": lambda m: "XIII.3" in m,
+    "Вольф": lambda m: "песочные часы" in m,
+    "Голгофа": lambda m: "череп" in m,
+    "Чичагова": lambda m: "уроборос" in m,
+    "Берд": lambda m: "тамара" in m,
+    "Докучаев": lambda m: "могила посещается" in m,
+    "Люгебиль": lambda m: "большой проспект в.о., дом. 31" in m,
+    "Коваленко": lambda m: "коваленко" in m,
+    "Флит": lambda m: "флит" in m,
+    "Сюзор": lambda m: "сюзор" in m,
+    "Энгельгардт": lambda m: "13" in m,
 }
 
 
@@ -164,16 +187,19 @@ class QuestionHandler:
         bot.register_message_handler(self.answer, state=f"Спросил_{self.step}")
 
     async def question(self, message):
+        await log_state(message)
         await bot.set_state(message.from_user.id, f"Спросил_{self.step}", message.chat.id)
         await send_messages(message.chat.id, texts[self.step]["вопрос"])
 
     async def answer(self, message):
-        log_user_answer(self.step, message.text)
-        if self.is_correct(message.text.lower()):
+        await log_state(message)
+        log_user_answer(texts[self.step]["ответ"], message.text)
+        if "дальше" in message.text.lower() or self.is_correct(message.text.lower()):
             await bot.set_state(message.from_user.id, f"{self.step}", message.chat.id)
             await send_messages(message.chat.id, texts[self.step]["кстати"], True)
         else:
             await bot.send_message(message.chat.id, "Это неправильный ответ")
+
 
 # Наполняем логику бота из файла с текстами
 prev_step = "start"
