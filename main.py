@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-from random import randint
+from random import randint, random
 from time import sleep
 from typing import Callable, List
 
@@ -24,6 +24,13 @@ telebot.logger.setLevel(logging.DEBUG)
 def log_user_answer(expected: str, answer: str) -> None:
     logger.info(f"Expected: {expected} Answer: {answer}")
 
+# Excursion points
+with open("./texts/text.yaml", "r") as f:
+    texts = load(f, SafeLoader)
+
+# Intro
+with open("./texts/intro.yaml", "r") as f:
+    intro_text = load(f, SafeLoader)
 
 # Environment variables
 dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
@@ -32,6 +39,9 @@ if os.path.exists(dotenv_path):
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 BUCKET_NAME = os.getenv("BUCKET_NAME")
+PROMO_15 = os.getenv("PROMO_15")
+PROMO_100 = os.getenv("PROMO_100")
+WIN_RATE = 0.33
 
 # S3 client
 session = boto3.session.Session()
@@ -118,19 +128,14 @@ async def start_ex(message):
     await bot.delete_state(message.from_user.id, message.chat.id)
     await bot.set_state(message.from_user.id, "start", message.chat.id)
     # Messages
-    await bot.send_message(
-        message.chat.id,
-        "Привет! Это начало квеста. Вот тебе координаты первой точки",
-        reply_markup=markup,
-    )
-    await bot.send_location(message.chat.id, latitude=59.9477864117122, longitude=30.256183737214254)
+    await send_messages(message.chat.id, intro_text["data"], True)
     # Сохранить данные пользователя в БД
     dump_s3(UserInfo.to_dict(message.from_user), f"users/started/{message.from_user.id}.json")
     logger.info(f"Saved user with id {message.from_user.id} to S3 bucket {BUCKET_NAME}")
 
 
 # TODO Определить шаг на котором мы приходим к финишу
-@bot.message_handler(state="Prang")
+@bot.message_handler(state="Энгельгардт")
 async def finish_ex(message):
     """
     Финиш экскурсии.
@@ -138,7 +143,17 @@ async def finish_ex(message):
     """
     await log_state(message)
     await bot.set_state(message.from_user.id, "finish", message.chat.id)
-    await bot.send_message(message.chat.id, "Поздравляю. Вот тебе подарок (ТУТ ДОЛЖЕН БЫТЬ ПОДАРОК)")
+    # Логика по определению промокода
+    if random() < WIN_RATE:
+        # Выиграл промокод на бесплатную экскурсию
+        # TODO Проверка наличия бесплатных билетов (уже выдано менее 100)
+        promo_100_available = TRUE
+        if promo_100_available:
+            await bot.send_message(message.chat.id, "Поздравляю. Вот тебе экскурсия бесплатно(ТУТ ДОЛЖЕН БЫТЬ ПОДАРОК)")
+        else:
+            await bot.send_message(message.chat.id, "Поздравляю. Вот тебе скидка на экскурсию (ТУТ ДОЛЖЕН БЫТЬ ПОДАРОК)")
+    else:
+        await bot.send_message(message.chat.id, "Поздравляю. Вот тебе скидка на экскурсию (ТУТ ДОЛЖЕН БЫТЬ ПОДАРОК)")
     # Сохранить данные о прохождении квеста в БД
     dump_s3(UserInfo.to_dict(message.from_user), f"users/finished/{message.from_user.id}.json")
 
@@ -152,9 +167,7 @@ async def after_finish_ex(message):
     )
 
 
-# Excursion points
-with open("./text.yaml", "r") as f:
-    texts = load(f, SafeLoader)
+
 
 answer_checkers = {
     "Хосе": lambda m: "гесс" in m,
@@ -165,6 +178,7 @@ answer_checkers = {
     "Горвиц": lambda m: "товарищи" in m,
     "Грейг": lambda m: "прасков" in m,
     "Бекман": lambda m: "XIII.3" in m,
+    "Бауэрмайстер": lambda m: "остров" in m or "мертвых" in m,
     "Вольф": lambda m: "песочные часы" in m,
     "Голгофа": lambda m: "череп" in m,
     "Чичагова": lambda m: "уроборос" in m,
@@ -196,7 +210,7 @@ class QuestionHandler:
         log_user_answer(texts[self.step]["ответ"], message.text)
         if "дальше" in message.text.lower() or self.is_correct(message.text.lower()):
             await bot.set_state(message.from_user.id, f"{self.step}", message.chat.id)
-            await send_messages(message.chat.id, texts[self.step]["кстати"], True)
+            await send_messages(message.chat.id, texts[self.step]["кстати"] if hasattr(texts[self.step], "кстати") else [], True)
         else:
             await bot.send_message(message.chat.id, "Это неправильный ответ")
 
