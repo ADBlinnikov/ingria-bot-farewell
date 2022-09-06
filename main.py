@@ -2,35 +2,38 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime
 from random import randint, random
 from time import sleep
 from typing import Callable, List
 
 import boto3
+import sqlalchemy as sqla
 import telebot
 from botocore.errorfactory import ClientError
 from dotenv import load_dotenv
+from sqlalchemy import Boolean, Column, Integer, String
+from sqlalchemy.dialects.sqlite import DATETIME
+from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.sql import func
 from telebot import asyncio_filters
 from telebot.async_telebot import AsyncTeleBot, ExceptionHandler
-from telebot.asyncio_storage import StateMemoryStorage
-from telebot.types import ReplyKeyboardMarkup
+from telebot.asyncio_storage import StatePickleStorage
+from telebot.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
 from yaml import SafeLoader, load
 
 # Logging
 logger = telebot.logger
-telebot.logger.setLevel(logging.DEBUG)
+telebot.logger.setLevel(logging.INFO)
 
 
 def log_user_answer(expected: str, answer: str) -> None:
     logger.info(f"Expected: {expected} Answer: {answer}")
 
-# Excursion points
-with open("./texts/text.yaml", "r") as f:
-    texts = load(f, SafeLoader)
 
-# Intro
-with open("./texts/intro.yaml", "r") as f:
-    intro_text = load(f, SafeLoader)
+# Message content
+with open("./text.yaml", "r") as f:
+    texts = load(f, SafeLoader)
 
 # Environment variables
 dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
@@ -42,28 +45,14 @@ BUCKET_NAME = os.getenv("BUCKET_NAME")
 PROMO_15 = os.getenv("PROMO_15")
 PROMO_100 = os.getenv("PROMO_100")
 WIN_RATE = 0.33
+EXCURSION_START = datetime(2022, 10, 1)
 
 # S3 client
-session = boto3.session.Session()
-s3 = session.client(
+boto3_session = boto3.session.Session()
+s3 = boto3_session.client(
     service_name="s3",
     endpoint_url="https://storage.yandexcloud.net",
 )
-
-# Dataclasses
-class UserInfo:
-    @staticmethod
-    def to_dict(data):
-        return {
-            "id": getattr(data, "id", None),
-            "is_bot": getattr(data, "is_bot", None),
-            "first_name": getattr(data, "first_name", None),
-            "last_name": getattr(data, "last_name", None),
-            "username": getattr(data, "username", None),
-            "language_code": getattr(data, "language_code", None),
-            "is_premium": getattr(data, "is_premium", None),
-            "added_to_attachment_menu": getattr(data, "added_to_attachment_menu", None),
-        }
 
 
 def dump_s3(obj, f, rewrite=False):
@@ -82,41 +71,127 @@ def dump_s3(obj, f, rewrite=False):
         return s3.put_object(Bucket=BUCKET_NAME, Key=f, Body=json.dumps(obj, ensure_ascii=False))
 
 
+# Local database logic
+Base = declarative_base()
+
+
+def telegram_user_as_dict(data):
+    return {
+        "id": getattr(data, "id", None),
+        "first_name": getattr(data, "first_name", None),
+        "last_name": getattr(data, "last_name", None),
+        "username": getattr(data, "username", None),
+    }
+
+
+class User(Base):
+    __tablename__ = "User"
+    # Telegram data
+    id = Column(Integer, primary_key=True)
+    first_name = Column(String, nullable=True)
+    last_name = Column(String, nullable=True)
+    username = Column(String, nullable=True)
+    # Our data
+    try_count = Column(Integer, default=0)
+    started_at = Column(DATETIME, nullable=True)
+    finished_at = Column(DATETIME, nullable=True)
+    is_winner = Column(Boolean, nullable=True)
+
+    def __repr__(self):
+        return f"""<User (id={self.id}
+            first_name={self.first_name}
+            last_name={self.last_name}
+            username={self.username}
+            try_count={self.try_count}
+            started_at={self.started_at}
+            finished_at={self.finished_at}
+            is_winner={self.is_winner})>"""
+
+
+def get_or_create(session, model, **kwargs):
+    instance = session.query(model).filter_by(**kwargs).first()
+    if instance:
+        return instance
+    else:
+        instance = model(**kwargs)
+        session.add(instance)
+        session.commit()
+        return instance
+
+
+# Initialize database and create tables
+engine = sqla.create_engine("sqlite:///data.db", echo=True, future=True)
+Base.metadata.create_all(engine)
+Session = sessionmaker(engine)
+
 # Bot instance
 class MyExceptionHandler(ExceptionHandler):
     def handle(self, exception):
         logger.error(exception)
 
 
-bot = AsyncTeleBot(TOKEN, state_storage=StateMemoryStorage(), exception_handler=MyExceptionHandler())
+bot = AsyncTeleBot(TOKEN, state_storage=StatePickleStorage(), exception_handler=MyExceptionHandler())
 
-markup = ReplyKeyboardMarkup(resize_keyboard=True)
-markup.add("Идем дальше")
+remove_keyboard = ReplyKeyboardRemove()
 
-CONGRATS = ["Это правильный ответ", "Верно", "Правильно"]
 
+def one_btn_keyboard(text: str):
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(text)
+    return markup
+
+
+get_going_markup = one_btn_keyboard("Идем дальше")
+farewell_markup = one_btn_keyboard("В добрый путь!")
+giveup_markup = one_btn_keyboard("Пропустить вопрос")
+luther_what_markup = one_btn_keyboard("Так Смоленское или Лютеранское?")
+
+CONGRATS = ["Это правильный ответ!", "Верно!", "Правильно", "В точку!"]
+
+
+def random_congrats():
+    return CONGRATS[randint(0, len(CONGRATS) - 1)]
+
+
+# Bot helpers
 async def log_state(message):
     state = await bot.current_states.get_state(message.from_user.id, message.chat.id)
     logger.info(f"State: {state}")
 
-async def send_messages(chat_id: str, messages: List[str], after_answer: bool = False):
-    if after_answer:
-        await bot.send_message(chat_id, CONGRATS[randint(0, len(CONGRATS) - 1)])
+
+async def send_messages(
+    chat_id: str,
+    messages: List[str],
+    markup=None,
+):
     for msg in messages:
         if isinstance(msg, str):
-            await bot.send_message(chat_id, msg, reply_markup=None)
+            await bot.send_message(chat_id, msg, reply_markup=markup)
         else:
             if msg["type"] == "photo":
-                await bot.send_photo(chat_id, msg["file_id"])
-    if after_answer:
-        await bot.send_message(
-            chat_id,
-            "Нажми 'Идем дальше', когда будешь готов к следующему заданию",
-            reply_markup=markup,
-        )
+                await bot.send_photo(chat_id, msg["file_id"], reply_markup=markup, caption=msg.get("caption", None))
+            elif msg["type"] == "location":
+                await bot.send_location(
+                    chat_id,
+                    latitude=msg["lat"],
+                    longitude=msg["lng"],
+                    horizontal_accuracy=25,
+                )
 
 
 # ===== Message handlers =====
+@bot.message_handler(state="*", commands=["stats"])
+async def stats(message):
+    with Session() as s:
+        users_count = s.query(func.count(User.id)).scalar()
+        users_finished = s.query(func.count(User.id)).filter(User.finished_at != None).scalar()
+    msg = (
+        f"Пользователей всего: {users_count}\n"
+        f"Пользователей закончили квест: {users_finished}\n"
+    )
+    await bot.send_message(message.chat.id, msg)
+
+
 @bot.message_handler(state="*", commands=["start"])
 async def start_ex(message):
     """
@@ -128,14 +203,42 @@ async def start_ex(message):
     await bot.delete_state(message.from_user.id, message.chat.id)
     await bot.set_state(message.from_user.id, "start", message.chat.id)
     # Messages
-    await send_messages(message.chat.id, intro_text["data"], True)
-    # Сохранить данные пользователя в БД
-    dump_s3(UserInfo.to_dict(message.from_user), f"users/started/{message.from_user.id}.json")
-    logger.info(f"Saved user with id {message.from_user.id} to S3 bucket {BUCKET_NAME}")
+    await send_messages(message.chat.id, texts["вводная"], markup=luther_what_markup)
+    # Парсим данные пользователя
+    user_dict = telegram_user_as_dict(message.from_user)
+    # Сохраним основные данные в s3
+    dump_s3(user_dict, f"users/started/{message.from_user.id}.json")
+    logger.info(f"Saved user with id {message.from_user.id} to s3://{BUCKET_NAME}/users/started")
+    # Сохраним данные пользователя в БД, если их ещё нет
+    try:
+        with Session() as s:
+            user = get_or_create(s, User, **user_dict)
+            if user.started_at == None:
+                user.started_at = datetime.utcnow()
+            s.commit()
+    except Exception as e:
+        logger.exception("Ошибка при записи пользователя в таблицу", exc_info=e)
 
 
-# TODO Определить шаг на котором мы приходим к финишу
-@bot.message_handler(state="Энгельгардт")
+@bot.message_handler(state="start")
+async def about_luther(message):
+    # State
+    await log_state(message)
+    await bot.set_state(message.from_user.id, "Лютер", message.chat.id)
+    # Messages
+    await send_messages(message.chat.id, texts["Лютер"], markup=farewell_markup)
+
+
+@bot.message_handler(state="Лютер")
+async def enterance(message):
+    # State
+    await log_state(message)
+    await bot.set_state(message.from_user.id, "вход", message.chat.id)
+    # Messages
+    await send_messages(message.chat.id, texts["вход"], markup=get_going_markup)
+
+
+@bot.message_handler(state="Чичагова")
 async def finish_ex(message):
     """
     Финиш экскурсии.
@@ -143,52 +246,77 @@ async def finish_ex(message):
     """
     await log_state(message)
     await bot.set_state(message.from_user.id, "finish", message.chat.id)
-    # Логика по определению промокода
-    if random() < WIN_RATE:
-        # Выиграл промокод на бесплатную экскурсию
-        # TODO Проверка наличия бесплатных билетов (уже выдано менее 100)
-        promo_100_available = TRUE
-        if promo_100_available:
-            await bot.send_message(message.chat.id, "Поздравляю. Вот тебе экскурсия бесплатно(ТУТ ДОЛЖЕН БЫТЬ ПОДАРОК)")
-        else:
-            await bot.send_message(message.chat.id, "Поздравляю. Вот тебе скидка на экскурсию (ТУТ ДОЛЖЕН БЫТЬ ПОДАРОК)")
+    # Наше почтение
+    await bot.send_message(message.chat.id, "Ура, ты сделал это! Мы же говорили, что ты сможешь")
+    # Сохранить данные о прохождении квеста в s3
+    user_dict = telegram_user_as_dict(message.from_user)
+    dump_s3(user_dict, f"users/finished/{message.from_user.id}.json")
+    logger.info(f"Saved user with id {message.from_user.id} to s3://{BUCKET_NAME}/users/finished")
+    # Также сохраним информацию в БД
+    with Session() as s:
+        user = s.query(User).get(message.from_user.id)
+        # Запишем время первого завершения
+        if user.finished_at == None:
+            user.finished_at = datetime.utcnow()
+        # Если участник завершил в первый раз, то надо провести розыгрыш
+        if user.is_winner == None:
+            # Посчитаем количество выданных экскурсий
+            winners_count = s.query(func.count(User.id)).filter(User.is_winner == True).scalar()
+            # Победа возможна если выдано меньше 100
+            promo_100_available = winners_count < 100
+            # И при это рандом меньше целевого значения
+            random_draw = random() < WIN_RATE
+            # Является ли участник победителем
+            is_winner = promo_100_available and random_draw
+            user.is_winner = is_winner
+        s.commit()
+    # Логика по выдаче промокода
+    if is_winner == True:
+        await bot.send_message(message.chat.id, texts["победа100"].format(PROMO_100))
     else:
-        await bot.send_message(message.chat.id, "Поздравляю. Вот тебе скидка на экскурсию (ТУТ ДОЛЖЕН БЫТЬ ПОДАРОК)")
-    # Сохранить данные о прохождении квеста в БД
-    dump_s3(UserInfo.to_dict(message.from_user), f"users/finished/{message.from_user.id}.json")
+        await bot.send_message(message.chat.id, texts["победа15"].format(PROMO_15))
+    # Ссылка на экскурсию
+    if datetime.now() < EXCURSION_START:
+        await bot.send_message(message.chat.id, texts["победа30сен"])
+    else:
+        await bot.send_message(message.chat.id, texts["победа1окт"])
+    # Приглашаем на ОХВ
+    await send_messages(message.chat.id, texts["ОХВ"], markup=remove_keyboard)
+    # Оставьте отзыв
+    await bot.send_message(
+        message.chat.id,
+        "Это наш первый квест по кладбищу. Будем благодарны, если ты оставишь отзыв 🙏 Любой! Даже плохой, будем работать над собой",
+    )
 
 
 @bot.message_handler(state="finish")
 async def after_finish_ex(message):
     await log_state(message)
+    # Сохраним отзыв в s3
+    dump_s3(message.text, f"users/feedback/{message.from_user.id}/{message.message_id}.json")
     await bot.send_message(
         message.chat.id,
-        "Ты уже прошел квест. Если хочешь начать сначала напиши /start",
+        "Спасибо за отзыв! В любой момент можешь дополнить его написав ещё пару ласковых",
     )
 
 
-
-
 answer_checkers = {
+    "Энгельгардт": lambda m: "13" in m,
+    "Дерево": lambda m: "5" in m,
     "Хосе": lambda m: "гесс" in m,
-    "Массон": lambda m: "яковлев" in m,
+    "Берд": lambda m: "тамара" in m,
     "Гримм": lambda m: "1933" in m,
     "Парланд": lambda m: "обп" in m or "о.б.п." in m or "облсовет" in m or "осоавиахим" in m,
+    "Симанский": lambda m: "севкабель" in m,
+    "Пророков": lambda m: "булки" in m or "паулки" in m,
     "Чинизелли": lambda m: "34" in m,
     "Горвиц": lambda m: "товарищи" in m,
     "Грейг": lambda m: "прасков" in m,
-    "Бекман": lambda m: "XIII.3" in m,
     "Бауэрмайстер": lambda m: "остров" in m or "мертвых" in m,
+    "Бекман": lambda m: "xii" in m or "12" in m,
     "Вольф": lambda m: "песочные часы" in m,
     "Голгофа": lambda m: "череп" in m,
     "Чичагова": lambda m: "уроборос" in m,
-    "Берд": lambda m: "тамара" in m,
-    "Докучаев": lambda m: "могила посещается" in m,
-    "Люгебиль": lambda m: "большой проспект в.о., дом. 31" in m,
-    "Коваленко": lambda m: "коваленко" in m,
-    "Флит": lambda m: "флит" in m,
-    "Сюзор": lambda m: "сюзор" in m,
-    "Энгельгардт": lambda m: "13" in m,
 }
 
 
@@ -203,21 +331,45 @@ class QuestionHandler:
     async def question(self, message):
         await log_state(message)
         await bot.set_state(message.from_user.id, f"Спросил_{self.step}", message.chat.id)
-        await send_messages(message.chat.id, texts[self.step]["вопрос"])
+        await send_messages(message.chat.id, texts["экскурсия"][self.step]["вопрос"], markup=remove_keyboard)
 
     async def answer(self, message):
         await log_state(message)
-        log_user_answer(texts[self.step]["ответ"], message.text)
-        if "дальше" in message.text.lower() or self.is_correct(message.text.lower()):
-            await bot.set_state(message.from_user.id, f"{self.step}", message.chat.id)
-            await send_messages(message.chat.id, texts[self.step]["кстати"] if hasattr(texts[self.step], "кстати") else [], True)
-        else:
-            await bot.send_message(message.chat.id, "Это неправильный ответ")
+        log_user_answer(texts["экскурсия"][self.step]["ответ"], message.text)
+        with Session() as s:
+            user = s.query(User).get(message.from_user.id)
+            user_gave_up = "пропустить вопрос" in message.text.lower() and user.try_count > 1
+            if user_gave_up or self.is_correct(message.text.lower()):
+                await bot.set_state(message.from_user.id, f"{self.step}", message.chat.id)
+                if self.is_correct(message.text.lower()):
+                    await bot.send_message(message.chat.id, random_congrats())
+                await send_messages(message.chat.id, texts["экскурсия"][self.step].get("кстати", []))
+                await bot.send_message(
+                    message.chat.id,
+                    "Нажми 'Идем дальше', когда будешь готов к следующему заданию",
+                    reply_markup=get_going_markup,
+                )
+                user.try_count = 0
+            else:
+                user.try_count += 1
+                try_count = user.try_count
+                # Первая попытка
+                if try_count == 1:
+                    await bot.send_message(message.chat.id, "Это неправильный ответ. Попробуй ещё раз")
+                # Следующие попытки
+                elif try_count > 1:
+                    await bot.send_message(
+                        message.chat.id,
+                        "Снова мимо. Можешь попытаться ещё раз или пропустить вопрос",
+                        reply_markup=giveup_markup,
+                    )
+            s.commit()
+            s.close()
 
 
 # Наполняем логику бота из файла с текстами
-prev_step = "start"
-for point in texts.keys():
+prev_step = "вход"
+for point in texts["экскурсия"].keys():
     try:
         checker = answer_checkers[point]
     except KeyError:
@@ -227,7 +379,6 @@ for point in texts.keys():
 
 
 bot.add_custom_filter(asyncio_filters.StateFilter(bot))
-bot.add_custom_filter(asyncio_filters.IsDigitFilter())
 
 # Polling
 
