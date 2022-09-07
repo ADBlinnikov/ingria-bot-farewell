@@ -24,7 +24,7 @@ from yaml import SafeLoader, load
 
 # Logging
 logger = telebot.logger
-telebot.logger.setLevel(logging.INFO)
+telebot.logger.setLevel(logging.DEBUG)
 
 
 def log_user_answer(expected: str, answer: str) -> None:
@@ -130,7 +130,12 @@ class MyExceptionHandler(ExceptionHandler):
         logger.error(exception)
 
 
-bot = AsyncTeleBot(TOKEN, state_storage=StatePickleStorage(), exception_handler=MyExceptionHandler())
+bot = AsyncTeleBot(
+    TOKEN,
+    parse_mode="Markdown",
+    state_storage=StatePickleStorage(),
+    exception_handler=MyExceptionHandler(),
+)
 
 remove_keyboard = ReplyKeyboardRemove()
 
@@ -169,7 +174,12 @@ async def send_messages(
             await bot.send_message(chat_id, msg, reply_markup=markup)
         else:
             if msg["type"] == "photo":
-                await bot.send_photo(chat_id, msg["file_id"], reply_markup=markup, caption=msg.get("caption", None))
+                await bot.send_photo(
+                    chat_id,
+                    msg["file_id"],
+                    reply_markup=markup,
+                    caption=msg.get("caption", None),
+                )
             elif msg["type"] == "location":
                 await bot.send_location(
                     chat_id,
@@ -177,6 +187,8 @@ async def send_messages(
                     longitude=msg["lng"],
                     horizontal_accuracy=25,
                 )
+            elif msg["type"] == "audio":
+                await bot.send_audio(chat_id, msg["file_id"], reply_markup=markup)
 
 
 # ===== Message handlers =====
@@ -185,10 +197,7 @@ async def stats(message):
     with Session() as s:
         users_count = s.query(func.count(User.id)).scalar()
         users_finished = s.query(func.count(User.id)).filter(User.finished_at != None).scalar()
-    msg = (
-        f"Пользователей всего: {users_count}\n"
-        f"Пользователей закончили квест: {users_finished}\n"
-    )
+    msg = f"Пользователей всего: {users_count}\n" f"Пользователей закончили квест: {users_finished}\n"
     await bot.send_message(message.chat.id, msg)
 
 
@@ -259,7 +268,8 @@ async def finish_ex(message):
         if user.finished_at == None:
             user.finished_at = datetime.utcnow()
         # Если участник завершил в первый раз, то надо провести розыгрыш
-        if user.is_winner == None:
+        is_winner = user.is_winner
+        if is_winner == None:
             # Посчитаем количество выданных экскурсий
             winners_count = s.query(func.count(User.id)).filter(User.is_winner == True).scalar()
             # Победа возможна если выдано меньше 100
@@ -308,7 +318,7 @@ answer_checkers = {
     "Гримм": lambda m: "1933" in m,
     "Парланд": lambda m: "обп" in m or "о.б.п." in m or "облсовет" in m or "осоавиахим" in m,
     "Симанский": lambda m: "севкабель" in m,
-    "Пророков": lambda m: "булки" in m or "паулки" in m,
+    "Пророков": lambda m: "фандер" in m or "флит" in m,
     "Чинизелли": lambda m: "34" in m,
     "Горвиц": lambda m: "товарищи" in m,
     "Грейг": lambda m: "прасков" in m,
@@ -331,7 +341,11 @@ class QuestionHandler:
     async def question(self, message):
         await log_state(message)
         await bot.set_state(message.from_user.id, f"Спросил_{self.step}", message.chat.id)
-        await send_messages(message.chat.id, texts["экскурсия"][self.step]["вопрос"], markup=remove_keyboard)
+        await send_messages(
+            message.chat.id,
+            texts["экскурсия"][self.step]["вопрос"],
+            markup=remove_keyboard,
+        )
 
     async def answer(self, message):
         await log_state(message)
