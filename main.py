@@ -24,7 +24,7 @@ from yaml import SafeLoader, load
 
 # Logging
 logger = telebot.logger
-telebot.logger.setLevel(logging.DEBUG)
+telebot.logger.setLevel(logging.INFO)
 
 
 def log_user_answer(expected: str, answer: str) -> None:
