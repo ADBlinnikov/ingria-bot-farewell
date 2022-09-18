@@ -43,8 +43,6 @@ if os.path.exists(dotenv_path):
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 BUCKET_NAME = os.getenv("BUCKET_NAME")
 PROMO_15 = os.getenv("PROMO_15")
-PROMO_100 = os.getenv("PROMO_100")
-WIN_RATE = 0.33
 EXCURSION_START = datetime(2022, 10, 1)
 
 # S3 client
@@ -92,7 +90,7 @@ class User(Base):
     last_name = Column(String, nullable=True)
     username = Column(String, nullable=True)
     # Our data
-    try_count = Column(Integer, default=0)
+    try_count = Column(Integer, default=5)
     started_at = Column(DATETIME, nullable=True)
     finished_at = Column(DATETIME, nullable=True)
     is_winner = Column(Boolean, nullable=True)
@@ -109,7 +107,7 @@ class User(Base):
 
 
 def get_or_create(session, model, **kwargs):
-    instance = session.query(model).filter_by(**kwargs).first()
+    instance = session.query(model).get(kwargs["id"])
     if instance:
         return instance
     else:
@@ -120,7 +118,7 @@ def get_or_create(session, model, **kwargs):
 
 
 # Initialize database and create tables
-engine = sqla.create_engine("sqlite:///data.db", echo=True, future=True)
+engine = sqla.create_engine("sqlite:///data.db", echo=True)
 Base.metadata.create_all(engine)
 Session = sessionmaker(engine)
 
@@ -263,28 +261,13 @@ async def finish_ex(message):
     logger.info(f"Saved user with id {message.from_user.id} to s3://{BUCKET_NAME}/users/finished")
     # Также сохраним информацию в БД
     with Session() as s:
-        user = s.query(User).get(message.from_user.id)
+        user = get_or_create(s, User, **user_dict)
         # Запишем время первого завершения
         if user.finished_at == None:
             user.finished_at = datetime.utcnow()
-        # Если участник завершил в первый раз, то надо провести розыгрыш
-        is_winner = user.is_winner
-        if is_winner == None:
-            # Посчитаем количество выданных экскурсий
-            winners_count = s.query(func.count(User.id)).filter(User.is_winner == True).scalar()
-            # Победа возможна если выдано меньше 100
-            promo_100_available = winners_count < 100
-            # И при это рандом меньше целевого значения
-            random_draw = random() < WIN_RATE
-            # Является ли участник победителем
-            is_winner = promo_100_available and random_draw
-            user.is_winner = is_winner
         s.commit()
     # Логика по выдаче промокода
-    if is_winner == True:
-        await bot.send_message(message.chat.id, texts["победа100"].format(PROMO_100))
-    else:
-        await bot.send_message(message.chat.id, texts["победа15"].format(PROMO_15))
+    await bot.send_message(message.chat.id, texts["победа15"].format(PROMO_15))
     # Ссылка на экскурсию
     if datetime.now() < EXCURSION_START:
         await bot.send_message(message.chat.id, texts["победа30сен"])
@@ -303,7 +286,8 @@ async def finish_ex(message):
 async def after_finish_ex(message):
     await log_state(message)
     # Сохраним отзыв в s3
-    dump_s3(message.text, f"users/feedback/{message.from_user.id}/{message.message_id}.json")
+    if "идем дальше" not in message.text.lower():
+        dump_s3(message.text, f"users/feedback/{message.from_user.id}/{message.message_id}.json")
     await bot.send_message(
         message.chat.id,
         "Спасибо за отзыв! В любой момент можешь дополнить его написав ещё пару ласковых",
@@ -351,9 +335,12 @@ class QuestionHandler:
         await log_state(message)
         log_user_answer(texts["экскурсия"][self.step]["ответ"], message.text)
         with Session() as s:
-            user = s.query(User).get(message.from_user.id)
-            user_gave_up = "пропустить вопрос" in message.text.lower() and user.try_count > 1
-            if user_gave_up or self.is_correct(message.text.lower()):
+            user_dict = telegram_user_as_dict(message.from_user)
+            user = get_or_create(s, User, **user_dict)
+            try_count = user.try_count
+            user_gave_up = "пропустить вопрос" in message.text.lower() and try_count > 0
+            user_answered = self.is_correct(message.text.lower())
+            if user_gave_up or user_answered:
                 await bot.set_state(message.from_user.id, f"{self.step}", message.chat.id)
                 if self.is_correct(message.text.lower()):
                     await bot.send_message(message.chat.id, random_congrats())
@@ -363,19 +350,20 @@ class QuestionHandler:
                     "Нажми 'Идем дальше', когда будешь готов к следующему заданию",
                     reply_markup=get_going_markup,
                 )
-                user.try_count = 0
+                if user_gave_up:
+                    user.try_count -= 1
             else:
-                user.try_count += 1
-                try_count = user.try_count
-                # Первая попытка
-                if try_count == 1:
-                    await bot.send_message(message.chat.id, "Это неправильный ответ. Попробуй ещё раз")
-                # Следующие попытки
-                elif try_count > 1:
+                # У пользователя остались попытки
+                if try_count > 0:
                     await bot.send_message(
                         message.chat.id,
-                        "Снова мимо. Можешь попытаться ещё раз или пропустить вопрос",
+                        f"Можешь попытаться ещё раз или пропустить. Ты можешь пропустить ещё {try_count} вопросов",
                         reply_markup=giveup_markup,
+                    )
+                # Следующие попытки
+                else:
+                    await bot.send_message(
+                        message.chat.id, "Это неправильный ответ, попробуй ещё раз. Возможности пропустить больше нет"
                     )
             s.commit()
             s.close()
