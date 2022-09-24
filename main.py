@@ -187,6 +187,13 @@ async def send_messages(
                 )
             elif msg["type"] == "audio":
                 await bot.send_audio(chat_id, msg["file_id"], reply_markup=markup)
+            elif msg["type"] == "document":
+                await bot.send_document(
+                    chat_id,
+                    msg["file_id"],
+                    reply_markup=markup,
+                    caption=msg.get("caption", None),
+                )
 
 
 # ===== Message handlers =====

@@ -31,8 +31,8 @@
     lng: 30.2561306
   - Сразу после входа на кладбище находится информационный стенд с картой, на которой обозначены участки кладбища и наиболее известные захоронения
   - Мы рекомендуем внимательно изучить информацию на стенде. Начинаем!
-  - type: photo
-    file_id: AgACAgIAAxkBAAIEfmMTunVt7WQpuLdWR5vMoUwjEVrsAAJJwDEbEdqhSJ8JFhKU7FK_AQADAgADeQADKQQ
+  - type: document
+    file_id: BQACAgIAAxkBAAJtLWMvNvveTNaiw5ExqR1Yr5DMqRncAAJ0IQACfTp4SQTCZraI91ehKQQ
     caption: Тебе пригодится. Можешь не благодарить.
 
 победа15: Мы очень надеемся на скорую встречу и дарим тебе скидку 15% на новую выставку в Анненкирхе! Скидка работает по промокоду {}
