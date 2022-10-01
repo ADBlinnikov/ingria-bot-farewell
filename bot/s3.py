@@ -25,11 +25,11 @@ def dump_s3(obj, f, rewrite=False):
         # Check if file exists
         s3.head_object(Bucket=BUCKET_NAME, Key=f)
         if rewrite:
+            logger.info(f"File rewrite to s3://{BUCKET_NAME}/{f}")
             return s3.put_object(Bucket=BUCKET_NAME, Key=f, Body=json.dumps(obj, ensure_ascii=False))
-            logger.info(f"Saved user with id {message.from_user.id} to s3://{BUCKET_NAME}/users/started")
         else:
             return
     except ClientError:
         # File not found - create new file
+        logger.info(f"File created at to s3://{BUCKET_NAME}/{f}")
         return s3.put_object(Bucket=BUCKET_NAME, Key=f, Body=json.dumps(obj, ensure_ascii=False))
-        logger.info(f"Saved user with id {message.from_user.id} to s3://{BUCKET_NAME}/users/started")

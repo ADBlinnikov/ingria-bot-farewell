@@ -1,18 +1,9 @@
-from sqlalchemy import Boolean, Column, Integer, MetaData, String, Table, create_engine
+from sqlalchemy import Boolean, Column, Integer, String, create_engine
 from sqlalchemy.dialects.sqlite import DATETIME
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.sql import func
 
-meta = declarative_base()
-
-
-def telegram_user_as_dict(data):
-    return {
-        "id": getattr(data, "id", None),
-        "first_name": getattr(data, "first_name", None),
-        "last_name": getattr(data, "last_name", None),
-        "username": getattr(data, "username", None),
-    }
+Base = declarative_base()
 
 
 class User(Base):
@@ -28,6 +19,12 @@ class User(Base):
     finished_at = Column(DATETIME, nullable=True)
     is_winner = Column(Boolean, nullable=True)
 
+    def __init__(self, data):
+        self.id = getattr(data, "id", None)
+        self.first_name = getattr(data, "first_name", None)
+        self.last_name = getattr(data, "last_name", None)
+        self.username = getattr(data, "username", None)
+
     def __repr__(self):
         return f"""<User (id={self.id}
             first_name={self.first_name}
@@ -38,16 +35,21 @@ class User(Base):
             finished_at={self.finished_at}
             is_winner={self.is_winner})>"""
 
+    def get_or_create(self, session):
+        instance = session.query(self.__class__).get(self.id)
+        if instance:
+            return instance
+        else:
+            session.add(self)
+            return self
 
-def get_or_create(session, model, **kwargs):
-    instance = session.query(model).get(kwargs["id"])
-    if instance:
-        return instance
-    else:
-        instance = model(**kwargs)
-        session.add(instance)
-        session.commit()
-        return instance
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "username": self.username,
+        }
 
 
 # Initialize database and create tables

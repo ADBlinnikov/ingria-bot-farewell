@@ -12,7 +12,7 @@ from telebot.asyncio_storage import StatePickleStorage
 from telebot.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
 from yaml import SafeLoader, load
 
-from .db import Session, User, get_or_create, telegram_user_as_dict
+from .db import Session, User
 from .s3 import dump_s3
 
 PROMO_15 = os.getenv("PROMO_15")
@@ -59,6 +59,9 @@ farewell_markup = one_btn_keyboard("В добрый путь!")
 giveup_markup = one_btn_keyboard("Пропустить вопрос")
 luther_what_markup = one_btn_keyboard("Так Смоленское или Лютеранское?")
 
+GET_GOING_TEXT = "Нажми 'Идем дальше', когда будешь готов к следующему заданию"
+WRONG_ANSWER_TEXT = "Это неправильный ответ, попробуй ещё раз. Возможности пропустить больше нет"
+TRY_AGAIN_TEXT = "Можешь попытаться ещё раз или пропустить. Ты можешь пропустить ещё {}"
 CONGRATS = ["Это правильный ответ!", "Верно!", "Правильно", "В точку!"]
 
 
@@ -109,7 +112,7 @@ async def send_messages(
 # ===== Message handlers =====
 @bot.message_handler(state="*", commands=["stats"])
 async def stats(message):
-    with Session() as s:
+    with Session.begin() as s:
         users_count = s.query(func.count(User.id)).scalar()
         users_finished = s.query(func.count(User.id)).filter(User.finished_at != None).scalar()
     msg = f"Пользователей всего: {users_count}\n" f"Пользователей закончили квест: {users_finished}\n"
@@ -129,17 +132,16 @@ async def start_ex(message):
     # Messages
     await send_messages(message.chat.id, texts["вводная"], markup=luther_what_markup)
     # Парсим данные пользователя
-    user_dict = telegram_user_as_dict(message.from_user)
+    user = User(message.from_user)
     # Сохраним основные данные в s3
-    dump_s3(user_dict, f"users/started/{message.from_user.id}.json")
-
+    dump_s3(user.to_dict(), f"users/started/{message.from_user.id}.json")
     # Сохраним данные пользователя в БД, если их ещё нет
     try:
-        with Session() as s:
-            user = get_or_create(s, User, **user_dict)
+        with Session.begin() as s:
+            user = user.get_or_create(s)
             if user.started_at == None:
                 user.started_at = datetime.utcnow()
-            s.commit()
+                s.commit()
     except Exception as e:
         logger.exception("Ошибка при записи пользователя в таблицу", exc_info=e)
 
@@ -173,16 +175,15 @@ async def finish_ex(message):
     # Наше почтение
     await bot.send_message(message.chat.id, "Ура, ты сделал это! Мы же говорили, что ты сможешь")
     # Сохранить данные о прохождении квеста в s3
-    user_dict = telegram_user_as_dict(message.from_user)
-    dump_s3(user_dict, f"users/finished/{message.from_user.id}.json")
-    logger.info(f"Saved user with id {message.from_user.id} to s3://{BUCKET_NAME}/users/finished")
+    user = User(message.from_user)
+    dump_s3(user.to_dict(), f"users/finished/{message.from_user.id}.json")
     # Также сохраним информацию в БД
-    with Session() as s:
-        user = get_or_create(s, User, **user_dict)
+    with Session.begin() as s:
+        user = user.get_or_create(s)
         # Запишем время первого завершения
         if user.finished_at == None:
             user.finished_at = datetime.utcnow()
-        s.commit()
+            s.commit()
     # Логика по выдаче промокода
     await bot.send_message(message.chat.id, texts["победа15"].format(PROMO_15))
     # Ссылка на экскурсию
@@ -221,11 +222,11 @@ answer_checkers = {
     "Симанский": lambda m: "севкабель" in m,
     "Пророков": lambda m: "фандер" in m or "флит" in m,
     "Чинизелли": lambda m: "34" in m,
-    "Горвиц": lambda m: "товарищи" in m,
+    "Горвиц": lambda m: "эх" in m or "товарищи" in m,
     "Грейг": lambda m: "прасков" in m,
     "Бауэрмайстер": lambda m: "остров" in m or "мертвых" in m,
     "Бекман": lambda m: "xii" in m or "12" in m,
-    "Вольф": lambda m: "песочные часы" in m,
+    "Вольф": lambda m: "песочные" in m or "часы" in m,
     "Голгофа": lambda m: "череп" in m,
     "Чичагова": lambda m: "уроборос" in m,
 }
@@ -251,37 +252,28 @@ class QuestionHandler:
     async def answer(self, message):
         await log_state(message)
         log_user_answer(texts["экскурсия"][self.step]["ответ"], message.text)
-        with Session() as s:
-            user_dict = telegram_user_as_dict(message.from_user)
-            user = get_or_create(s, User, **user_dict)
-            try_count = user.try_count
-            user_gave_up = "пропустить вопрос" in message.text.lower() and try_count > 0
+        with Session.begin() as s:
+            user = User(message.from_user).get_or_create(s)
+            user_gave_up = "пропустить" in message.text.lower() and user.try_count > 0
             user_answered = self.is_correct(message.text.lower())
             if user_gave_up or user_answered:
                 await bot.set_state(message.from_user.id, f"{self.step}", message.chat.id)
-                if self.is_correct(message.text.lower()):
-                    await bot.send_message(message.chat.id, random_congrats())
-                await send_messages(message.chat.id, texts["экскурсия"][self.step].get("кстати", []))
-                await bot.send_message(
-                    message.chat.id,
-                    "Нажми 'Идем дальше', когда будешь готов к следующему заданию",
-                    reply_markup=get_going_markup,
-                )
                 if user_gave_up:
                     user.try_count -= 1
+                elif user_answered:
+                    await bot.send_message(message.chat.id, random_congrats())
+                await send_messages(message.chat.id, texts["экскурсия"][self.step].get("кстати", []))
+                await bot.send_message(message.chat.id, GET_GOING_TEXT, reply_markup=get_going_markup)
             else:
                 # У пользователя остались попытки
-                if try_count > 0:
+                if user.try_count > 0:
                     await bot.send_message(
                         message.chat.id,
-                        f"Можешь попытаться ещё раз или пропустить. Ты можешь пропустить ещё {try_count} вопросов",
+                        TRY_AGAIN_TEXT.format(user.try_count),
                         reply_markup=giveup_markup,
                     )
-                # Следующие попытки
                 else:
-                    await bot.send_message(
-                        message.chat.id, "Это неправильный ответ, попробуй ещё раз. Возможности пропустить больше нет"
-                    )
+                    await bot.send_message(message.chat.id, WRONG_ANSWER_TEXT)
             s.commit()
             s.close()
 
