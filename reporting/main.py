@@ -63,7 +63,7 @@ def generate_feedback_report():
         text, upd = read(file)
         feedback = UserFeedback(user_id=uid, message_id=mid, text=text.decode("utf8"), last_modified=upd)
         data.append(feedback)
-    data.sort(key=lambda x: x.last_modified)
+    data.sort(key=lambda x: x.last_modified, reverse=True)
     page = template.render(title="Отзывы", data=data, last_update=NOW)
     write(page, f"reports/feedback.html")
 
