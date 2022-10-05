@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+    <div>Последнее обновление: {{ last_update.strftime('%Y-%m-%d %H:%M:%S') }}</div>
+    <table id="data" class="table table-striped">
+        <thead>
+            <tr>
+                <th>Пользователь</th>
+                <th>Текст</th>
+                <th>Дата</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for user in data %}
+                <tr>
+                    <td>{{ user.user_id or '-' }}</td>
+                    <td>{{ user.text or '-' }}</td>
+                    <td>{{ user.last_modified.strftime('%Y-%m-%d %H:%M:%S') if user.last_modified is not none else '-' }}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}
