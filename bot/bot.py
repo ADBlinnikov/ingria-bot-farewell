@@ -139,7 +139,7 @@ async def stats(message):
     msg = (
         f"Пользователей всего: {users_count}\n"
         + f"Пользователей закончили квест: {users_finished}\n"
-        + f"За последние 7 дней:\n{users_per_day}\n"
+        + f"За последние 7 дней:\n{'\n'.join(users_per_day)}\n"
     )
     await bot.send_message(message.chat.id, msg)
 
