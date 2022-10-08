@@ -1,9 +1,7 @@
-from ast import mod
 import boto3
 import json
-from jinja2 import FileSystemLoader, Environment, select_autoescape, PackageLoader
+from jinja2 import Environment, select_autoescape, PackageLoader
 from datetime import datetime
-from collections import defaultdict
 
 from .data import User, UserFeedback
 

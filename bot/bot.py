@@ -1,15 +1,15 @@
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from random import randint
 from typing import Callable, List
 
 import telebot
-from sqlalchemy import func
+from sqlalchemy import func, desc
 from telebot import asyncio_filters
 from telebot.async_telebot import AsyncTeleBot, ExceptionHandler
 from telebot.asyncio_storage import StatePickleStorage
-from telebot.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telebot.types import ReplyKeyboardMarkup, ReplyKeyboardRemove, InputMediaPhoto
 from yaml import SafeLoader, load
 
 from .db import Session, User
@@ -20,7 +20,7 @@ EXCURSION_START = datetime(2022, 10, 1)
 
 # Logging
 logger = telebot.logger
-telebot.logger.setLevel(logging.INFO)
+telebot.logger.setLevel(logging.DEBUG)
 
 
 def log_user_answer(expected: str, answer: str) -> None:
@@ -107,15 +107,40 @@ async def send_messages(
                     reply_markup=markup,
                     caption=msg.get("caption", None),
                 )
+            elif msg["type"] == "media_group":
+                logger.debug(f"Media: {msg['media']}")
+                media = [InputMediaPhoto(media=m["media"], caption=m.get("caption", None)) for m in msg["media"]]
+                await bot.send_media_group(chat_id, media)
 
 
 # ===== Message handlers =====
+@bot.message_handler(state="*", commands=["setstate"])
+async def set_state(message):
+    new_state = message.text.split(" ")[1]
+    msg = f"Состояние обновлено на: {new_state}"
+    await bot.set_state(message.from_user.id, new_state, message.chat.id)
+    await bot.send_message(message.chat.id, msg)
+
+
 @bot.message_handler(state="*", commands=["stats"])
 async def stats(message):
+    today_midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    days_ago = today_midnight - timedelta(days=7)
     with Session.begin() as s:
         users_count = s.query(func.count(User.id)).scalar()
         users_finished = s.query(func.count(User.id)).filter(User.finished_at != None).scalar()
-    msg = f"Пользователей всего: {users_count}\n" f"Пользователей закончили квест: {users_finished}\n"
+        users_per_day = (
+            s.query(func.strftime("%Y-%m-%d", User.finished_at), func.count(User.id))
+            .group_by(func.strftime("%Y-%m-%d", User.finished_at))
+            .order_by(desc(func.strftime("%Y-%m-%d", User.finished_at)))
+            .filter(User.finished_at >= days_ago)
+            .all()
+        )
+    msg = (
+        f"Пользователей всего: {users_count}\n"
+        + f"Пользователей закончили квест: {users_finished}\n"
+        + f"За последние 7 дней:\n{users_per_day}\n"
+    )
     await bot.send_message(message.chat.id, msg)
 
 
@@ -173,7 +198,14 @@ async def finish_ex(message):
     await log_state(message)
     await bot.set_state(message.from_user.id, "finish", message.chat.id)
     # Наше почтение
-    await bot.send_message(message.chat.id, "Ура, ты сделал это! Мы же говорили, что ты сможешь")
+    await send_messages(message.chat.id, texts["победа"], markup=remove_keyboard)
+    # Приглашаем на ОХВ
+    await send_messages(message.chat.id, texts["ОХВ"], markup=remove_keyboard)
+    # Оставьте отзыв
+    await bot.send_message(
+        message.chat.id,
+        "Это наш первый квест по кладбищу. Будем благодарны, если ты оставишь отзыв 🙏 Любой! Даже плохой, будем работать над собой. Отзыв можно написать прямо здесь 👇",
+    )
     # Сохранить данные о прохождении квеста в s3
     user = User(message.from_user)
     dump_s3(user.to_dict(), f"users/finished/{message.from_user.id}.json")
@@ -184,20 +216,6 @@ async def finish_ex(message):
         if user.finished_at == None:
             user.finished_at = datetime.utcnow()
             s.commit()
-    # Логика по выдаче промокода
-    await bot.send_message(message.chat.id, texts["победа15"].format(PROMO_15))
-    # Ссылка на экскурсию
-    if datetime.now() < EXCURSION_START:
-        await bot.send_message(message.chat.id, texts["победа30сен"])
-    else:
-        await bot.send_message(message.chat.id, texts["победа1окт"])
-    # Приглашаем на ОХВ
-    await send_messages(message.chat.id, texts["ОХВ"], markup=remove_keyboard)
-    # Оставьте отзыв
-    await bot.send_message(
-        message.chat.id,
-        "Это наш первый квест по кладбищу. Будем благодарны, если ты оставишь отзыв 🙏 Любой! Даже плохой, будем работать над собой",
-    )
 
 
 @bot.message_handler(state="finish")
