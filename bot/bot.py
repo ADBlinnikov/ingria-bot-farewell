@@ -20,7 +20,7 @@ EXCURSION_START = datetime(2022, 10, 1)
 
 # Logging
 logger = telebot.logger
-telebot.logger.setLevel(logging.DEBUG)
+telebot.logger.setLevel(logging.INFO)
 
 
 def log_user_answer(expected: str, answer: str) -> None:
