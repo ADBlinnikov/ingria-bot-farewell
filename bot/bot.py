@@ -136,10 +136,11 @@ async def stats(message):
             .filter(User.finished_at >= days_ago)
             .all()
         )
+    daily_stats = "\n".join([f"{i[0]} {i[1]}" for i in users_per_day])
     msg = (
         f"Пользователей всего: {users_count}\n"
         + f"Пользователей закончили квест: {users_finished}\n"
-        + f"За последние 7 дней:\n{'\n'.join(users_per_day)}\n"
+        + f"За последние 7 дней:\n{daily_stats}\n"
     )
     await bot.send_message(message.chat.id, msg)
 
