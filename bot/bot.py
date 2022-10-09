@@ -201,7 +201,7 @@ async def finish_ex(message):
     # Наше почтение
     await send_messages(message.chat.id, texts["победа"], markup=remove_keyboard)
     # Приглашаем на ОХВ
-    await send_messages(message.chat.id, texts["ОХВ"], markup=remove_keyboard)
+    # await send_messages(message.chat.id, texts["ОХВ"], markup=remove_keyboard)
     # Оставьте отзыв
     await bot.send_message(
         message.chat.id,
