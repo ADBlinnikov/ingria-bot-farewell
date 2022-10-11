@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
+    <h1>Отзывы</h1>
+    <hr/>
     <div>Последнее обновление: {{ last_update.strftime('%Y-%m-%d %H:%M:%S') }}</div>
     <table id="data" class="table table-striped">
         <thead>
@@ -12,7 +14,7 @@
         <tbody>
             {% for user in data %}
                 <tr>
-                    <td>{{ user.user_id or '-' }}</td>
+                    <td>{{ user.user or '-' }}</td>
                     <td>{{ user.text or '-' }}</td>
                     <td>{{ user.last_modified.strftime('%Y-%m-%d %H:%M:%S') if user.last_modified is not none else '-' }}</td>
                 </tr>

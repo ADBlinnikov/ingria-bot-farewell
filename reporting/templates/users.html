@@ -1,6 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
+    <h1>
+        {% if type == 'started' %}
+            Пользователи начавшие квест
+        {% elif type == 'finished' %}
+            Пользователи завершившие квест
+        {% endif %}
+    </h1>
+    <hr/>
     <div>Последнее обновление: {{ last_update.strftime('%Y-%m-%d %H:%M:%S') }}</div>
+    <div>
+        <a href="{{ type }}.csv" download="{{ type }}.csv">Download</a>
+    </div>
     <table id="data" class="table table-striped">
         <thead>
             <tr>

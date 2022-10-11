@@ -3,3 +3,7 @@ venv/
 .env
 data.db
 .state-save
+
+# S3 folders
+users
+reports
