@@ -1,0 +1,45 @@
+service: ingria-bot-farewell
+frameworkVersion: "3"
+
+useDotenv: true
+
+provider:
+  name: yandex-cloud
+  runtime: nodejs16
+  httpApi:
+    payload: '1.0'
+
+plugins:
+  - "@yandex-cloud/serverless-plugin"
+
+package:
+  patterns:
+    - '!**'
+    - package.json
+    - package-lock.json
+    - dist/*.js
+    - text.yaml
+
+functions:
+  main:
+    handler: dist/index.handler
+    memorySize: 128
+    timeout: '5'
+    account: function-sa
+    environment:
+      BOT_TOKEN: ${env:BOT_TOKEN}
+      S3_STATES_BUCKET: ${env:S3_STATES_BUCKET}
+      AWS_ACCESS_KEY_ID: ${env:AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${env:AWS_SECRET_ACCESS_KEY}
+    events:
+      - http:
+          method: post
+          path: /telegraf
+
+resources:
+  function-sa:
+    type: yc::ServiceAccount
+    roles:
+      - editor
+      - storage.viewer
+      - storage.uploader
