@@ -45,7 +45,7 @@ async function getS3Object(bucket: string, file: string, initial: any) {
       })
     );
     const content = await data.Body?.transformToString();
-    console.debug("s3 Object content: ", content);
+    console.debug("s3 Object content: %s", content);
     if (typeof content === "string") {
       return JSON.parse(content);
     } else {
@@ -70,7 +70,7 @@ async function putStringToBucket(bucket: string, key: string, body: string) {
     );
     return data;
   } catch (error) {
-    console.debug("Cannot put S3 object:", error);
+    console.error("Cannot put S3 object:", error);
   }
 }
 
@@ -84,7 +84,7 @@ async function deleteS3Object(bucket: string, key: string) {
     );
     return data;
   } catch (error) {
-    console.debug("Cannot delete S3 object:", error);
+    console.error("Cannot delete S3 object:", error);
   }
 }
 
@@ -110,7 +110,7 @@ export class S3Session {
   }
 
   async clearSession(key: string) {
-    console.debug("clear session", key);
+    console.debug("clear session %s", key);
     return await deleteS3Object(this.options.bucket, key);
   }
 
@@ -118,7 +118,6 @@ export class S3Session {
     if (!session || Object.keys(session).length === 0) {
       return await this.clearSession(key);
     }
-    console.debug("save session", key, session);
     return await putStringToBucket(
       this.options.bucket,
       key,
@@ -133,7 +132,6 @@ export class S3Session {
         return await next();
       }
       let session = await this.getSession(key);
-      console.debug("session snapshot", key, session);
       Object.defineProperty(ctx, this.options.property, {
         get: function () {
           return session;
