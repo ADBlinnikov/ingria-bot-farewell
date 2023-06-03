@@ -1,5 +1,4 @@
 import { Context, Markup } from "telegraf";
-import { InlineKeyboardMarkup, ReplyKeyboardRemove } from "telegraf/types";
 
 const escapeForMessage = (text: string) => {
   return text.replace(

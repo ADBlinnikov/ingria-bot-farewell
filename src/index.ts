@@ -2,7 +2,7 @@ import { Handler } from "@yandex-cloud/function-types";
 import { Telegraf } from "telegraf";
 import { firstStep, stepProcessor } from "./logic";
 import { S3Session } from "./session";
-import { MyContext } from "./context";
+import { MyContext, initialState } from "./context";
 
 // Declare bot
 const bot = new Telegraf<MyContext>(process.env.BOT_TOKEN!);
@@ -10,12 +10,21 @@ const bot = new Telegraf<MyContext>(process.env.BOT_TOKEN!);
 // Middleware
 const s3Session = new S3Session({
   bucket: process.env.S3_STATES_BUCKET!,
-  initial: () => ({ skip_counter: 0, try_counter: 0, stage: 0, feedback: [] }),
+  initial: initialState,
 });
 bot.use(s3Session.middleware());
 
 // First step
 bot.start(firstStep);
+bot.command("stage", (ctx) => {
+  let stageToSet = ctx.message.text.split(" ")[1];
+  if (stageToSet) {
+    ctx.session.stage = parseInt(stageToSet);
+    ctx.reply("Stage is set");
+  } else {
+    ctx.reply("Current stage: " + ctx.session.stage);
+  }
+});
 // Extract method to separate file
 bot.on("text", stepProcessor);
 

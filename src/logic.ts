@@ -2,6 +2,7 @@ import { content } from "./content";
 import { send } from "./send";
 import { validate } from "./validate";
 import { MyContext } from "./context";
+import { putStringToBucket } from "./s3";
 
 const SKIP_MAX = 5;
 
@@ -58,11 +59,19 @@ export const stepProcessor = async (ctx: MyContext) => {
       stage.name === "feedback" &&
       !validate(text, { type: "containsAny", values: ["идем", "дальше"] })
     ) {
-      if (ctx.session.feedback) {
-        ctx.session.feedback.push(text);
-      } else {
-        ctx.session.feedback = [text];
-      }
+      let now = new Date();
+      putStringToBucket(
+        process.env.S3_STATES_BUCKET!,
+        `feedback/year=${now.getFullYear()}/month=${now.getMonth() + 1}/${
+          ctx.message.message_id
+        }`,
+        JSON.stringify({
+          user_id: ctx.message.from.id,
+          user_name: ctx.message.from.username,
+          time: now.toISOString(),
+          text: text,
+        })
+      );
     }
   }
 };
