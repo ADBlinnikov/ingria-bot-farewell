@@ -1,9 +1,6 @@
-__pycache__
-venv/
-.env
-data.db
-.state-save
-
-# S3 folders
-users
-reports
+node_modules/
+dist/
+.env*
+.serverless
+.vscode
+.nyc_output/
